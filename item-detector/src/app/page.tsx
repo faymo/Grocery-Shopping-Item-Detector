@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react";
+import Head from 'next/head';
 
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-backend-webgl';
@@ -16,6 +17,8 @@ export default function Home() {
   const [lastSpokenItem, setLastSpokenItem] = useState("");
   const [processingInterval, setProcessingInterval] = useState<number>(2000); // ms between predictions
   const [error, setError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
   
   // Tracking currently visible objects and which ones have been announced
   const currentlyVisibleObjectsRef = useRef<Set<string>>(new Set());
@@ -25,7 +28,7 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Load the COCO-SSD model
+  // Load the COCO-SSD model - optimized for mobile
   useEffect(() => {
     const loadModel = async () => {
       try {
@@ -70,8 +73,8 @@ export default function Home() {
       }
     };
   }, []);
-  
-  // Start/stop camera
+
+  // iOS-friendly camera toggle
   const toggleCamera = async () => {
     if (isCameraActive) {
       // Reset tracking when camera is turned off
@@ -98,54 +101,52 @@ export default function Home() {
         console.log("Requesting camera access...");
         const constraints = {
           video: { 
-            facingMode: 'environment',
+            facingMode: 'environment', // Use back camera
             width: { ideal: 1280 },
             height: { ideal: 720 }
           },
           audio: false
         };
         
+        // Show special instructions for iOS
+        if (isIOS()) {
+          speak("iOS requires camera permission. Please allow access when prompted.");
+        }
+        
         const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
         console.log("Camera access granted");
         
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
+          videoRef.current.setAttribute('playsinline', 'true'); // Critical for iOS inline video
           
-          setIsCameraActive(true);
-          console.log("Camera active state set to TRUE");
-          
-          // Wait for video to be ready
-          videoRef.current.onloadedmetadata = () => {
-            if (videoRef.current) {
-              videoRef.current.play().then(() => {
-                console.log("Video playback started - camera is now active");
-                speak("Camera started. Scanning for grocery items.");
-                
-                // Start detection after a short delay to ensure video is playing
-                setTimeout(() => {
-                  console.log("Starting detection interval, camera active:", isCameraActive);
-                  startDetectionInterval();
-                }, 500);
-              }).catch(err => {
-                console.error("Error starting video playback:", err);
-                setError(`Video playback error: ${err instanceof Error ? err.message : String(err)}`);
-                // Reset camera active state on error
-                setIsCameraActive(false);
-              });
-            }
-          };
+          // Special handling for iOS
+          try {
+            await videoRef.current.play();
+            setIsCameraActive(true);
+            speak("Camera started. Scanning for grocery items.");
+            startDetectionInterval();
+          } catch (playError) {
+            console.error("Play error:", playError);
+            // iOS often requires user interaction for video play
+            setError("Please tap the 'Start Camera' button again for iOS permission");
+          }
         }
       } catch (error) {
         console.error("Error accessing camera:", error);
         setError(`Camera access error: ${error instanceof Error ? error.message : String(error)}`);
         speak("Could not access camera. Please check permissions.");
-        // Ensure camera state is false on error
-        setIsCameraActive(false);
       }
     }
   };
   
-  // Speak text using Web Speech API
+  // Helper to detect iOS
+  const isIOS = () => {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  };
+  
+  // Speak text using Web Speech API - iOS compatible
   const speak = (text: string) => {
     if (!speakResults) return;
     
@@ -156,7 +157,11 @@ export default function Home() {
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
-    window.speechSynthesis.speak(utterance);
+    
+    // iOS often works better with a slight delay
+    setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 100);
   };
   
   // Toggle speech feedback
@@ -165,9 +170,20 @@ export default function Home() {
     speak(speakResults ? "Voice feedback disabled" : "Voice feedback enabled");
   };
   
-  // Start periodic detection
+  // Toggle fullscreen mode for better viewing
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+    setShowControls(!isFullscreen); // Show/hide controls on fullscreen toggle
+  };
+  
+  // Toggle controls visibility
+  const toggleControls = () => {
+    setShowControls(!showControls);
+  };
+  
+  // Start periodic detection - mobile optimized
   const startDetectionInterval = () => {
-    console.log("Starting detection interval - CURRENT camera state:", isCameraActive);
+    console.log("Starting detection interval");
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
@@ -191,35 +207,36 @@ export default function Home() {
     }, processingInterval);
   };
   
-  // Detect objects in video frame
+  // Detect objects in video frame - optimized for mobile
   const detectObjects = async () => {
     // Check if video is actually playing
     const isVideoPlaying = videoRef.current && 
-                          videoRef.current.srcObject && 
-                          !videoRef.current.paused && 
-                          videoRef.current.readyState >= 2;
-    
+                        videoRef.current.srcObject && 
+                        !videoRef.current.paused && 
+                        videoRef.current.readyState >= 2;
+  
     if (!model || !videoRef.current || !canvasRef.current || !isVideoPlaying) {
-      console.log("Detection skipped - prerequisites not met");
       return;
     }
     
     try {
-      // Detect objects
-      const allPredictions = await model.detect(videoRef.current, undefined, 0.2);
+      // Create a set of currently detected object classes
+      const newVisibleObjects = new Set<string>();
+      
+      // Detect objects with lower threshold for mobile
+      const allPredictions = await model.detect(videoRef.current, undefined, 0.3);
       
       // Filter out person detections
       const predictions = allPredictions.filter(pred => pred.class !== "person");
       
-      // Create a set of currently detected object classes
-      const newVisibleObjects = new Set<string>();
+      // Gather high confidence predictions
       predictions.forEach(pred => {
         if (pred.score > 0.55) { // Only track high confidence detections
           newVisibleObjects.add(pred.class);
         }
       });
       
-      // Find objects that disappeared since last detection
+      // Find objects that disappeared
       const disappearedObjects: string[] = [];
       currentlyVisibleObjectsRef.current.forEach(obj => {
         if (!newVisibleObjects.has(obj)) {
@@ -227,10 +244,9 @@ export default function Home() {
         }
       });
       
-      // Remove disappeared objects from announcement tracking
+      // Remove disappeared objects from announced list
       disappearedObjects.forEach(obj => {
         announcedObjectsRef.current.delete(obj);
-        console.log(`Object disappeared and can be announced again: ${obj}`);
       });
       
       // Update currently visible objects
@@ -256,30 +272,46 @@ export default function Home() {
             // Get coordinates and dimensions
             const [x, y, width, height] = prediction.bbox;
             
-            // Draw bounding box
-            ctx.strokeStyle = '#00FF00';
+            // Draw bounding box with iOS-style rounded corners
+            ctx.strokeStyle = '#007AFF'; // iOS blue
             ctx.lineWidth = 4;
-            ctx.strokeRect(x, y, width, height);
             
-            // Draw label background
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            const padding = 4;
+            // Draw rounded rectangle
+            const radius = 10;
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.arcTo(x + width, y, x + width, y + radius, radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
+            ctx.lineTo(x + radius, y + height);
+            ctx.arcTo(x, y + height, x, y + height - radius, radius);
+            ctx.lineTo(x, y + radius);
+            ctx.arcTo(x, y, x + radius, y, radius);
+            ctx.stroke();
+            
+            // Draw label with iOS-style pill shape
+            const padding = 10;
             const textWidth = ctx.measureText(prediction.class).width;
-            ctx.fillRect(x, y - 30, textWidth + padding * 2, 30);
+            const bgWidth = textWidth + padding * 2;
+            const bgHeight = 28;
+            
+            // Draw pill background
+            ctx.fillStyle = 'rgba(0, 122, 255, 0.9)'; // iOS blue with transparency
+            roundRect(ctx, x, y - bgHeight - 5, bgWidth, bgHeight, 14);
             
             // Draw label text
             ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 16px Arial';
-            ctx.fillText(prediction.class, x + padding, y - 10);
+            ctx.font = 'bold 16px -apple-system, system-ui, "Segoe UI", Roboto, Helvetica';
+            ctx.fillText(prediction.class, x + padding, y - 15);
             
-            // Mark if this object has been announced
-            const isAnnounced = announcedObjectsRef.current.has(prediction.class);
-            if (isAnnounced) {
-              // Draw a small green dot to indicate this has been announced
-              ctx.fillStyle = '#00FF00';
-              ctx.beginPath();
-              ctx.arc(x + width - 10, y - 20, 5, 0, 2 * Math.PI);
-              ctx.fill();
+            // Mark if this object has been announced with a checkmark
+            if (announcedObjectsRef.current.has(prediction.class)) {
+              const checkX = x + bgWidth - 20;
+              const checkY = y - bgHeight/2 - 5;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.font = 'bold 12px -apple-system';
+              ctx.fillText('✓', checkX, checkY);
             }
           }
         });
@@ -309,6 +341,29 @@ export default function Home() {
     }
   };
   
+  // Helper function to draw rounded rectangles
+  const roundRect = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    radius: number
+  ) => {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
+  };
+  
   // Function to repeat the latest detection announcement
   const repeatLatestDetection = () => {
     // Find the top detection from current detections
@@ -328,119 +383,183 @@ export default function Home() {
       speak("No objects currently detected");
     }
   };
-
+  
   return (
-    <div className="min-h-screen bg-black text-white p-4" role="application" aria-label="Grocery Assistant">
-      <main className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-center mb-6" tabIndex={0}>Grocery Assistant</h1>
-        
-        {/* Model loading state */}
-        {isModelLoading && (
-          <div className="flex flex-col items-center justify-center mb-6">
-            <div className="w-16 h-16 border-8 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="mt-4 text-xl" tabIndex={0}>Loading grocery recognition model...</p>
-          </div>
-        )}
-        
-        {/* Error message */}
-        {error && (
-          <div className="bg-red-800 p-4 rounded-lg mb-6">
-            <p className="font-bold">Error occurred:</p>
-            <p>{error}</p>
-            <button 
-              onClick={() => setError(null)}
-              className="mt-2 bg-red-600 px-4 py-2 rounded"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-        
-        {/* Camera container */}
-        <div className="relative w-full max-w-2xl mx-auto aspect-video bg-black rounded-lg overflow-hidden border-4 border-gray-700">
-          <video
-            ref={videoRef}
-            className="absolute inset-0 w-full h-full object-cover"
-            playsInline
-            muted
-            autoPlay
-            aria-hidden="true"
-          ></video>
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full object-cover"
-            aria-hidden="true"
-          ></canvas>
+    <>
+      <Head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <title>Grocery Assistant</title>
+      </Head>
+      
+      <div className={`min-h-screen bg-black text-white ${isFullscreen ? 'fixed inset-0 z-50' : ''}`} 
+           style={{paddingTop: isFullscreen ? 0 : 'env(safe-area-inset-top)',
+                  paddingBottom: isFullscreen ? 0 : 'env(safe-area-inset-bottom)'}}
+      >
+        <main className={`mx-auto ${isFullscreen ? 'p-0' : 'p-4'}`}>
+          {!isFullscreen && (
+            <h1 className="text-2xl font-bold text-center mb-4">Grocery Assistant</h1>
+          )}
           
-          {!isCameraActive && !isModelLoading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
-              <p className="text-2xl" tabIndex={0}>Camera is off</p>
+          {/* Model loading state */}
+          {isModelLoading && (
+            <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-50">
+              <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+              <p className="mt-4 text-xl px-8 text-center">Loading grocery recognition model...</p>
             </div>
           )}
-        </div>
-        
-        {/* Controls */}
-        <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8 flex-wrap">
-          <button
-            onClick={toggleCamera}
-            disabled={isModelLoading}
-            className={`px-8 py-5 rounded-xl text-xl font-bold transition-colors ${
-              isCameraActive
-                ? "bg-red-600 hover:bg-red-700"
-                : "bg-green-600 hover:bg-green-700"
-            } ${isModelLoading ? "opacity-50 cursor-not-allowed" : ""}`}
-            aria-label={isCameraActive ? "Stop Camera" : "Start Camera"}
-          >
-            {isCameraActive ? "STOP CAMERA" : "START CAMERA"}
-          </button>
           
-          <button
-            onClick={toggleSpeech}
-            className={`px-8 py-5 rounded-xl text-xl font-bold transition-colors ${
-              speakResults ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-600 hover:bg-gray-700"
-            }`}
-            aria-label={speakResults ? "Turn off voice feedback" : "Turn on voice feedback"}
-          >
-            {speakResults ? "VOICE ON" : "VOICE OFF"}
-          </button>
-          
-          {/* Add repeat detection button */}
-          <button
-            onClick={repeatLatestDetection}
-            disabled={!isCameraActive || detections.length === 0}
-            className="px-8 py-5 rounded-xl text-xl font-bold transition-colors bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50"
-            aria-label="Repeat latest detection"
-          >
-            REPEAT DETECTION
-          </button>
-        </div>
-        {/* Add detection indicator */}
-        {isCameraActive && !isModelLoading && (
-          <div className="absolute top-2 right-2 bg-black bg-opacity-70 px-3 py-1 rounded-lg text-sm">
-            {detections.length > 0 ? `Detected: ${detections.length} items` : "Scanning..."}
-          </div>
-        )}
-        {/* Detections list */}
-        <div className="mt-8" aria-live="polite">
-          <h2 className="text-2xl font-bold mb-4" tabIndex={0}>Detected Items</h2>
-          {detections.length > 0 ? (
-            <ul className="bg-gray-900 rounded-xl p-6 border-2 border-gray-700" role="list">
-              {detections.map((detection, index) => (
-                <li key={index} className="flex justify-between items-center py-3 border-b border-gray-700 last:border-none" tabIndex={0}>
-                  <span className="font-bold text-xl capitalize">{detection.class}</span>
-                  <span className="bg-blue-600 px-4 py-2 rounded-xl text-lg">
-                    {(detection.score * 100).toFixed(0)}%
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-gray-400 text-xl" tabIndex={0}>
-              {isCameraActive ? "Scanning for grocery items..." : "Start the camera to detect items"}
-            </p>
+          {/* Error message */}
+          {error && (
+            <div className="fixed bottom-20 left-0 right-0 mx-4 bg-red-800 p-4 rounded-lg mb-6 z-40">
+              <p className="font-bold">Error occurred:</p>
+              <p>{error}</p>
+              <button 
+                onClick={() => setError(null)}
+                className="mt-3 bg-red-600 px-4 py-3 rounded-lg w-full"
+              >
+                Dismiss
+              </button>
+            </div>
           )}
-        </div>
-      </main>
-    </div>
+          
+          {/* Camera container */}
+          <div 
+            className={`relative mx-auto overflow-hidden bg-black ${
+              isFullscreen 
+                ? 'fixed inset-0' 
+                : 'w-full aspect-video rounded-2xl border border-gray-800'
+            }`}
+            onClick={toggleControls}
+          >
+            <video
+              ref={videoRef}
+              className="absolute inset-0 w-full h-full object-cover"
+              playsInline
+              muted
+              autoPlay
+              aria-hidden="true"
+            ></video>
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full object-cover"
+              aria-hidden="true"
+            ></canvas>
+            
+            {!isCameraActive && !isModelLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
+                <p className="text-2xl">Camera is off</p>
+              </div>
+            )}
+            
+            {/* Object count badge */}
+            {isCameraActive && detections.length > 0 && (
+              <div className="absolute top-4 left-4 bg-black bg-opacity-70 px-3 py-1 rounded-full">
+                {detections.length} {detections.length === 1 ? 'object' : 'objects'}
+              </div>
+            )}
+            
+            {/* Fullscreen toggle */}
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFullscreen();
+              }}
+              className="absolute top-4 right-4 bg-black bg-opacity-70 p-3 rounded-full"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            >
+              {isFullscreen ? (
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="white" viewBox="0 0 16 16">
+                  <path d="M5.5 0a.5.5 0 0 1 .5.5v4A1.5 1.5 0 0 1 4.5 6h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5zm5 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 10 4.5v-4a.5.5 0 0 1 .5-.5zM0 10.5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 6 11.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zm10 1a1.5 1.5 0 0 1 1.5-1.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4z"/>
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="white" viewBox="0 0 16 16">
+                  <path d="M1.5 1a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5zM1.5 15a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v4a.5.5 0 0 1-.5.5zm13 0a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v4a.5.5 0 0 1-.5.5z"/>
+                </svg>
+              )}
+            </button>
+          </div>
+          
+          {/* Mobile-optimized floating controls */}
+          {showControls && (
+            <div className={`${isFullscreen ? 'fixed bottom-8 left-0 right-0' : 'mt-4'} px-4`}>
+              {/* Main controls */}
+              <div className="flex justify-around gap-2">
+                <button
+                  onClick={toggleCamera}
+                  disabled={isModelLoading}
+                  className={`flex-1 py-6 rounded-full text-lg font-bold transition-colors shadow-lg ${
+                    isCameraActive
+                      ? "bg-red-600 active:bg-red-700"
+                      : "bg-green-600 active:bg-green-700"
+                  } ${isModelLoading ? "opacity-50" : ""}`}
+                  aria-label={isCameraActive ? "Stop Camera" : "Start Camera"}
+                >
+                  {isCameraActive ? "STOP" : "START"}
+                </button>
+                
+                <button
+                  onClick={repeatLatestDetection}
+                  disabled={!isCameraActive || detections.length === 0}
+                  className="flex-1 py-6 rounded-full text-lg font-bold bg-yellow-600 active:bg-yellow-700 transition-colors shadow-lg disabled:opacity-50"
+                  aria-label="Repeat latest detection"
+                >
+                  REPEAT
+                </button>
+                
+                <button
+                  onClick={toggleSpeech}
+                  className={`flex-1 py-6 rounded-full text-lg font-bold transition-colors shadow-lg ${
+                    speakResults ? "bg-blue-600 active:bg-blue-700" : "bg-gray-600 active:bg-gray-700"
+                  }`}
+                  aria-label={speakResults ? "Turn off voice" : "Turn on voice"}
+                >
+                  {speakResults ? "VOICE" : "MUTE"}
+                </button>
+              </div>
+              
+              {/* Detections list - collapsible on mobile */}
+              {!isFullscreen && (
+                <div className="mt-6 max-h-48 overflow-y-auto rounded-2xl bg-gray-900 border border-gray-800">
+                  <h2 className="text-xl font-bold px-4 py-3 bg-gray-800 rounded-t-2xl">Detected Items</h2>
+                  {detections.length > 0 ? (
+                    <ul className="p-2">
+                      {detections
+                        .filter(d => d.score > 0.5)
+                        .sort((a, b) => b.score - a.score)
+                        .map((detection, index) => (
+                        <li key={index} className="flex justify-between items-center p-3 border-b border-gray-800 last:border-none">
+                          <span className="font-bold text-lg capitalize">{detection.class}</span>
+                          <span className="bg-blue-600 px-3 py-1 rounded-full text-sm">
+                            {(detection.score * 100).toFixed(0)}%
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-gray-400 p-4 text-center">
+                      {isCameraActive ? "Scanning for items..." : "Start the camera to detect items"}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Instructions - only show when not fullscreen */}
+          {!isFullscreen && (
+            <div className="mt-6 mb-16 p-4 bg-gray-900 rounded-2xl border border-gray-800">
+              <h2 className="text-lg font-bold mb-2">Tips for iOS Users</h2>
+              <ul className="space-y-2">
+                <li>• Allow camera permissions when prompted</li>
+                <li>• Hold phone steady for better detection</li>
+                <li>• Tap the screen to hide/show controls</li>
+              </ul>
+            </div>
+          )}
+        </main>
+      </div>
+    </>
   );
 }
