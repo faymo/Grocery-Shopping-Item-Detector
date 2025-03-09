@@ -2,12 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 
-// Import order matters for TensorFlow.js!
 import * as tf from '@tensorflow/tfjs';
-// Import backend first, before any models
 import '@tensorflow/tfjs-backend-webgl';
 import '@tensorflow/tfjs-converter';
-// Only import the model after TensorFlow itself is imported
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
 export default function Home() {
@@ -17,8 +14,12 @@ export default function Home() {
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [speakResults, setSpeakResults] = useState(true);
   const [lastSpokenItem, setLastSpokenItem] = useState("");
-  const [processingInterval, setProcessingInterval] = useState<number>(1000); // ms between predictions
+  const [processingInterval, setProcessingInterval] = useState<number>(2000); // ms between predictions
   const [error, setError] = useState<string | null>(null);
+  
+  // Tracking currently visible objects and which ones have been announced
+  const currentlyVisibleObjectsRef = useRef<Set<string>>(new Set());
+  const announcedObjectsRef = useRef<Set<string>>(new Set());
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,9 +40,8 @@ export default function Home() {
         const dummyTensor = tf.zeros([1, 1, 1, 1]);
         dummyTensor.dispose();
         
-        // Now load the COCO-SSD model (instead of MobileNet)
+        // Now load the COCO-SSD mode
         console.log("Loading COCO-SSD model...");
-        // Use "lite" for better mobile performance
         const loadedModel = await cocoSsd.load({
           base: 'mobilenet_v2'
         });
@@ -74,6 +74,10 @@ export default function Home() {
   // Start/stop camera
   const toggleCamera = async () => {
     if (isCameraActive) {
+      // Reset tracking when camera is turned off
+      currentlyVisibleObjectsRef.current = new Set();
+      announcedObjectsRef.current = new Set();
+
       if (videoRef.current && videoRef.current.srcObject) {
         const mediaStream = videoRef.current.srcObject as MediaStream;
         mediaStream.getTracks().forEach(track => track.stop());
@@ -107,7 +111,6 @@ export default function Home() {
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
           
-          // IMPORTANT: Set camera active state BEFORE playing the video
           setIsCameraActive(true);
           console.log("Camera active state set to TRUE");
           
@@ -116,7 +119,6 @@ export default function Home() {
             if (videoRef.current) {
               videoRef.current.play().then(() => {
                 console.log("Video playback started - camera is now active");
-                // State already set to true above
                 speak("Camera started. Scanning for grocery items.");
                 
                 // Start detection after a short delay to ensure video is playing
@@ -191,43 +193,56 @@ export default function Home() {
   
   // Detect objects in video frame
   const detectObjects = async () => {
-    // Check the ACTUAL state of video instead of React state
+    // Check if video is actually playing
     const isVideoPlaying = videoRef.current && 
                           videoRef.current.srcObject && 
                           !videoRef.current.paused && 
                           videoRef.current.readyState >= 2;
-                          
-    console.log("Detection function called - video is playing:", isVideoPlaying);
     
-    // If React state doesn't match reality, fix it
-    if (isVideoPlaying && !isCameraActive) {
-      console.log("Fixing state mismatch - video is playing but state is false");
-      setIsCameraActive(true);
-    }
-    
-    // Use the actual video state for detection, not the React state
     if (!model || !videoRef.current || !canvasRef.current || !isVideoPlaying) {
       console.log("Detection skipped - prerequisites not met");
       return;
     }
     
     try {
-      console.log("Running detection on current frame");
+      // Detect objects
+      const allPredictions = await model.detect(videoRef.current, undefined, 0.2);
       
-      // Lower detection threshold
-      const predictions = await model.detect(videoRef.current, undefined, 0.2);
-      console.log("Predictions received:", predictions);
+      // Filter out person detections
+      const predictions = allPredictions.filter(pred => pred.class !== "person");
       
+      // Create a set of currently detected object classes
+      const newVisibleObjects = new Set<string>();
+      predictions.forEach(pred => {
+        if (pred.score > 0.55) { // Only track high confidence detections
+          newVisibleObjects.add(pred.class);
+        }
+      });
+      
+      // Find objects that disappeared since last detection
+      const disappearedObjects: string[] = [];
+      currentlyVisibleObjectsRef.current.forEach(obj => {
+        if (!newVisibleObjects.has(obj)) {
+          disappearedObjects.push(obj);
+        }
+      });
+      
+      // Remove disappeared objects from announcement tracking
+      disappearedObjects.forEach(obj => {
+        announcedObjectsRef.current.delete(obj);
+        console.log(`Object disappeared and can be announced again: ${obj}`);
+      });
+      
+      // Update currently visible objects
+      currentlyVisibleObjectsRef.current = newVisibleObjects;
+      
+      // Update detections state for UI
       setDetections(predictions);
-      
-      // Add detailed logging to help diagnose issues
-      console.log("Canvas dimensions:", canvasRef.current.width, "×", canvasRef.current.height);
-      console.log("Video dimensions:", videoRef.current.videoWidth, "×", videoRef.current.videoHeight);
       
       // Draw the current frame and detection results
       const ctx = canvasRef.current.getContext('2d');
       if (ctx) {
-        // Set canvas dimensions to match video
+        // Set canvas dimensions
         canvasRef.current.width = videoRef.current.videoWidth;
         canvasRef.current.height = videoRef.current.videoHeight;
         
@@ -236,34 +251,57 @@ export default function Home() {
         
         // Draw bounding boxes for each detected object
         predictions.forEach(prediction => {
-          // Get coordinates and dimensions
-          const [x, y, width, height] = prediction.bbox;
-          
-          // Draw bounding box
-          ctx.strokeStyle = '#00FF00';
-          ctx.lineWidth = 4;
-          ctx.strokeRect(x, y, width, height);
-          
-          // Draw label background
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-          const padding = 4;
-          const textWidth = ctx.measureText(prediction.class).width;
-          ctx.fillRect(x, y - 30, textWidth + padding * 2, 30);
-          
-          // Draw label text
-          ctx.fillStyle = '#FFFFFF';
-          ctx.font = 'bold 16px Arial';
-          ctx.fillText(prediction.class, x + padding, y - 10);
+          // Draw only if high enough confidence
+          if (prediction.score > 0.55) {
+            // Get coordinates and dimensions
+            const [x, y, width, height] = prediction.bbox;
+            
+            // Draw bounding box
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(x, y, width, height);
+            
+            // Draw label background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            const padding = 4;
+            const textWidth = ctx.measureText(prediction.class).width;
+            ctx.fillRect(x, y - 30, textWidth + padding * 2, 30);
+            
+            // Draw label text
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 16px Arial';
+            ctx.fillText(prediction.class, x + padding, y - 10);
+            
+            // Mark if this object has been announced
+            const isAnnounced = announcedObjectsRef.current.has(prediction.class);
+            if (isAnnounced) {
+              // Draw a small green dot to indicate this has been announced
+              ctx.fillStyle = '#00FF00';
+              ctx.beginPath();
+              ctx.arc(x + width - 10, y - 20, 5, 0, 2 * Math.PI);
+              ctx.fill();
+            }
+          }
         });
         
-        // Speak the top prediction if it changed and has high confidence
-        if (predictions.length > 0) {
-          const topPrediction = predictions[0];
-          if (topPrediction.score > 0.6 && topPrediction.class !== lastSpokenItem) {
-            console.log("Speaking new detection:", topPrediction.class);
-            speak(topPrediction.class);
-            setLastSpokenItem(topPrediction.class);
-          }
+        // Announce new high-confidence objects
+        const highConfidencePredictions = predictions.filter(pred => 
+          pred.score > 0.65 && !announcedObjectsRef.current.has(pred.class)
+        );
+        
+        if (highConfidencePredictions.length > 0) {
+          // Sort by confidence
+          const topPrediction = highConfidencePredictions
+            .sort((a, b) => b.score - a.score)[0];
+          
+          // Announce the top new object
+          const className = topPrediction.class;
+          console.log(`Announcing new object: ${className} (${topPrediction.score.toFixed(2)})`);
+          speak(className);
+          
+          // Mark as announced
+          announcedObjectsRef.current.add(className);
+          setLastSpokenItem(className);
         }
       }
     } catch (error) {
@@ -271,6 +309,26 @@ export default function Home() {
     }
   };
   
+  // Function to repeat the latest detection announcement
+  const repeatLatestDetection = () => {
+    // Find the top detection from current detections
+    if (detections.length > 0) {
+      // Sort by confidence and get the top one
+      const topDetection = [...detections]
+        .filter(det => det.class !== "person")
+        .sort((a, b) => b.score - a.score)[0];
+      
+      if (topDetection) {
+        console.log(`Repeating detection: ${topDetection.class}`);
+        speak(`${topDetection.class}`);
+      } else {
+        speak("No objects currently detected");
+      }
+    } else {
+      speak("No objects currently detected");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-black text-white p-4" role="application" aria-label="Grocery Assistant">
       <main className="max-w-4xl mx-auto">
@@ -322,7 +380,7 @@ export default function Home() {
         </div>
         
         {/* Controls */}
-        <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8">
+        <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8 flex-wrap">
           <button
             onClick={toggleCamera}
             disabled={isModelLoading}
@@ -344,6 +402,16 @@ export default function Home() {
             aria-label={speakResults ? "Turn off voice feedback" : "Turn on voice feedback"}
           >
             {speakResults ? "VOICE ON" : "VOICE OFF"}
+          </button>
+          
+          {/* Add repeat detection button */}
+          <button
+            onClick={repeatLatestDetection}
+            disabled={!isCameraActive || detections.length === 0}
+            className="px-8 py-5 rounded-xl text-xl font-bold transition-colors bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50"
+            aria-label="Repeat latest detection"
+          >
+            REPEAT DETECTION
           </button>
         </div>
         {/* Add detection indicator */}
