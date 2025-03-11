@@ -77,7 +77,7 @@ export default function Home() {
   // iOS-friendly camera toggle
   const toggleCamera = async () => {
     if (isCameraActive) {
-      // Reset tracking when camera is turned off
+      // Stop camera code stays the same...
       currentlyVisibleObjectsRef.current = new Set();
       announcedObjectsRef.current = new Set();
 
@@ -94,48 +94,106 @@ export default function Home() {
         timerRef.current = null;
       }
       
-      // Announce camera off
       speak("Camera turned off");
     } else {
       try {
-        console.log("Requesting camera access...");
+        // Clear any existing errors first
+        setError(null);
+        
+        // iOS-specific handling
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        
+        // Simplified constraints for iOS
         const constraints = {
           video: { 
-            facingMode: 'environment', // Use back camera
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
+            facingMode: 'environment'
+            // No width/height constraints for iOS
           },
           audio: false
         };
         
-        // Show special instructions for iOS
-        if (isIOS()) {
-          speak("iOS requires camera permission. Please allow access when prompted.");
+        console.log("Requesting camera access...");
+        
+        // For iOS, we need to create a temporary video element first
+        // This sometimes helps trigger the permission dialog
+        if (isIOS) {
+          speak("Requesting camera access. Please allow when prompted.");
+          
+          // Create a temporary video element - this can help trigger iOS permissions
+          const tempVideo = document.createElement('video');
+          tempVideo.setAttribute('playsinline', 'true');
+          tempVideo.setAttribute('autoplay', 'true');
+          tempVideo.muted = true;
+          document.body.appendChild(tempVideo);
+          
+          try {
+            const tempStream = await navigator.mediaDevices.getUserMedia(constraints);
+            tempVideo.srcObject = tempStream;
+            await tempVideo.play();
+            
+            // Wait a moment before continuing
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Now stop this stream
+            tempStream.getTracks().forEach(track => track.stop());
+            document.body.removeChild(tempVideo);
+          } catch (err) {
+            console.log("Temp video setup failed:", err);
+            // Continue with normal flow
+          }
         }
         
+        // Main camera access request - should trigger permission dialog
         const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log("Camera access granted");
+        console.log("Camera access granted successfully");
         
         if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream;
-          videoRef.current.setAttribute('playsinline', 'true'); // Critical for iOS inline video
+          // Set these attributes BEFORE setting srcObject for iOS
+          videoRef.current.setAttribute('playsinline', 'true');
+          videoRef.current.setAttribute('autoplay', 'true');
+          videoRef.current.muted = true;
           
-          // Special handling for iOS
+          // Now set the stream
+          videoRef.current.srcObject = mediaStream;
+          
           try {
+            // Play immediately after setting srcObject
             await videoRef.current.play();
+            console.log("Video started playing successfully");
             setIsCameraActive(true);
-            speak("Camera started. Scanning for grocery items.");
-            startDetectionInterval();
+            speak("Camera started. Scanning for items.");
+            
+            // Start detection after camera initializes
+            setTimeout(() => {
+              startDetectionInterval();
+            }, 500);
           } catch (playError) {
             console.error("Play error:", playError);
-            // iOS often requires user interaction for video play
-            setError("Please tap the 'Start Camera' button again for iOS permission");
+            
+            if (isIOS) {
+              setError("iOS requires camera permission. Try: 1) Restart Safari 2) Verify camera permission in Settings > Safari > Camera 3) Add to Home Screen");
+            } else {
+              setError(`Camera error: ${playError instanceof Error ? playError.message : String(playError)}`);
+            }
           }
         }
       } catch (error) {
         console.error("Error accessing camera:", error);
-        setError(`Camera access error: ${error instanceof Error ? error.message : String(error)}`);
-        speak("Could not access camera. Please check permissions.");
+        
+        // Check if this is a permission error
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const isPermissionError = errorMsg.includes('Permission') || 
+                                errorMsg.includes('denied') ||
+                                errorMsg.includes('dismissed');
+        
+        if (isPermissionError) {
+          setError("Camera permission denied. On iPhone: 1) Go to Settings > Safari > Camera > Allow 2) Restart Safari 3) Try again");
+          speak("Camera permission denied. Please check your settings.");
+        } else if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+          setError("iPhone camera access issue: 1) Make sure you're using Safari 2) Add to Home Screen for best results 3) Check Settings > Safari > Camera");
+        } else {
+          setError(`Camera access error: ${errorMsg}`);
+        }
       }
     }
   };
@@ -390,6 +448,11 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/* Add these iOS-specific camera meta tags */}
+        <meta http-equiv="permissions-policy" content="camera=(), microphone=()"/>
+        <meta name="theme-color" content="#000000" />
+        <link rel="apple-touch-icon" href="/icon.png" />
+        <link rel="manifest" href="/manifest.json" />
         <title>Grocery Assistant</title>
       </Head>
       
@@ -397,7 +460,7 @@ export default function Home() {
            style={{paddingTop: isFullscreen ? 0 : 'env(safe-area-inset-top)',
                   paddingBottom: isFullscreen ? 0 : 'env(safe-area-inset-bottom)'}}
       >
-        <main className={`mx-auto ${isFullscreen ? 'p-0' : 'p-4'}`}>
+        <main className={`mx-auto ${isFullscreen ? 'p-0 h-full' : 'p-4'}`}>
           {!isFullscreen && (
             <h1 className="text-2xl font-bold text-center mb-4">Grocery Assistant</h1>
           )}
@@ -428,7 +491,7 @@ export default function Home() {
           <div 
             className={`relative mx-auto overflow-hidden bg-black ${
               isFullscreen 
-                ? 'fixed inset-0' 
+                ? 'fixed inset-0 z-40' 
                 : 'w-full aspect-video rounded-2xl border border-gray-800'
             }`}
             onClick={toggleControls}
@@ -460,13 +523,13 @@ export default function Home() {
               </div>
             )}
             
-            {/* Fullscreen toggle */}
+            {/* Fullscreen toggle - Always visible regardless of showControls */}
             <button 
               onClick={(e) => {
                 e.stopPropagation();
                 toggleFullscreen();
               }}
-              className="absolute top-4 right-4 bg-black bg-opacity-70 p-3 rounded-full"
+              className="absolute top-4 right-4 bg-black bg-opacity-70 p-3 rounded-full z-50"
               aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
             >
               {isFullscreen ? (
@@ -479,11 +542,27 @@ export default function Home() {
                 </svg>
               )}
             </button>
+
+            {/* Emergency exit fullscreen button - only shown when in fullscreen */}
+            {isFullscreen && (
+              <div className="fixed top-4 right-4 z-50">
+                <button
+                  onClick={() => setIsFullscreen(false)}
+                  className="bg-black bg-opacity-70 p-2 cursor-pointer rounded-full text-white hover:bg-opacity-90"
+                  aria-label="Exit fullscreen"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
           
           {/* Mobile-optimized floating controls */}
-          {showControls && (
-            <div className={`${isFullscreen ? 'fixed bottom-8 left-0 right-0' : 'mt-4'} px-4`}>
+          {(showControls || !isFullscreen) && (
+            <div className={`${isFullscreen ? 'fixed bottom-20 left-0 right-0' : 'mt-4'} px-4 z-40`}>
               {/* Main controls */}
               <div className="flex justify-around gap-2">
                 <button
