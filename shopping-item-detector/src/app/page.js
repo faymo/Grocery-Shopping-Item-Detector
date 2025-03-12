@@ -103,7 +103,6 @@ export default function Home() {
         
         // Request camera access
         const stream = await navigator.mediaDevices.getUserMedia({video:true});
-        streamRef.current = stream;
         // Make sure we have valid references before proceeding
         if (videoRef.current) {
           // Important: set attributes before setting srcObject
