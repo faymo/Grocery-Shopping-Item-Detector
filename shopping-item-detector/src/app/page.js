@@ -102,7 +102,13 @@ export default function Home() {
         setError(null);
         
         // Request camera access
-        const stream = await navigator.mediaDevices.getUserMedia({video:true});
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment', // This specifies the rear camera
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
         // Make sure we have valid references before proceeding
         if (videoRef.current) {
           // Important: set attributes before setting srcObject
