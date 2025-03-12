@@ -422,7 +422,7 @@ export default function Home() {
             className={`relative mx-auto overflow-hidden bg-black ${
               isFullscreen 
                 ? 'fixed inset-0' 
-                : 'w-full aspect-video rounded-2xl border border-gray-800'
+                : 'w-full h-[75vh] max-h-[75vh] md:aspect-video rounded-2xl border border-gray-800'
             }`}
             onClick={toggleControls}
           >
@@ -463,7 +463,7 @@ export default function Home() {
           
           {/* Mobile-optimized floating controls */}
           {showControls && (
-            <div className={`${isFullscreen ? 'fixed bottom-8 left-0 right-0' : 'mt-4'} px-4`}>
+            <div className={`${isFullscreen ? 'fixed bottom-8 left-0 right-0' : 'mt-2'} px-4`}>
               {/* Main controls */}
               <div className="flex justify-around gap-2">
                 <button
