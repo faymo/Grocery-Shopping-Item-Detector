@@ -428,7 +428,7 @@ export default function Home() {
             className={`relative mx-auto overflow-hidden bg-black ${
               isFullscreen 
                 ? 'fixed inset-0' 
-                : 'w-full h-[75vh] max-h-[75vh] md:aspect-video rounded-2xl border border-gray-800'
+                : 'w-full h-[65vh] max-h-[70vh] md:aspect-video rounded-2xl border border-gray-800'
             }`}
             onClick={toggleControls}
           >
