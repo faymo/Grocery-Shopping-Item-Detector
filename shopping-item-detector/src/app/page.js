@@ -15,7 +15,7 @@ export default function Home() {
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [speakResults, setSpeakResults] = useState(true);
   const [lastSpokenItem, setLastSpokenItem] = useState("");
-  const [processingInterval, setProcessingInterval] = useState(2000); // ms between predictions
+  const [processingInterval, setProcessingInterval] = useState(500); // ms between predictions
   const [error, setError] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
