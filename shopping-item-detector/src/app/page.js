@@ -17,7 +17,6 @@ export default function Home() {
   const [lastSpokenItem, setLastSpokenItem] = useState("");
   const [processingInterval, setProcessingInterval] = useState(500); // ms between predictions
   const [error, setError] = useState(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   
   // Tracking currently visible objects and which ones have been announced
@@ -167,12 +166,6 @@ export default function Home() {
   const toggleSpeech = () => {
     setSpeakResults(!speakResults);
     speak(speakResults ? "Voice feedback disabled" : "Voice feedback enabled");
-  };
-  
-  // Toggle fullscreen mode for better viewing
-  const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
-    setShowControls(!isFullscreen); // Show/hide controls on fullscreen toggle
   };
   
   // Toggle controls visibility
@@ -392,14 +385,12 @@ export default function Home() {
         <title>Grocery Assistant</title>
       </Head>
       
-      <div className={`min-h-screen bg-black text-white ${isFullscreen ? 'fixed inset-0 z-50' : ''}`} 
-           style={{paddingTop: isFullscreen ? 0 : 'env(safe-area-inset-top)',
-                  paddingBottom: isFullscreen ? 0 : 'env(safe-area-inset-bottom)'}}
+      <div className="min-h-screen bg-black text-white"
+           style={{paddingTop: 'env(safe-area-inset-top)',
+                  paddingBottom: 'env(safe-area-inset-bottom)'}}
       >
-        <main className={`mx-auto ${isFullscreen ? 'p-0' : 'p-4'}`}>
-          {!isFullscreen && (
-            <h1 className="text-2xl font-bold text-center mb-4">Grocery Assistant</h1>
-          )}
+        <main className="mx-auto p-4">
+          <h1 className="text-2xl font-bold text-center mb-4">Grocery Assistant</h1>
           
           {/* Model loading state */}
           {isModelLoading && (
@@ -423,13 +414,49 @@ export default function Home() {
             </div>
           )}
           
+          {/* Top Controls - Moved from bottom to top */}
+          {showControls && (
+            <div className="mb-4">
+              {/* Main controls */}
+              <div className="flex justify-around gap-2">
+                <button
+                  onClick={toggleCamera}
+                  disabled={isModelLoading}
+                  className={`flex-1 py-4 rounded-full text-lg font-bold transition-colors shadow-lg ${
+                    isCameraActive
+                      ? "bg-red-600 active:bg-red-700"
+                      : "bg-green-600 active:bg-green-700"
+                  } ${isModelLoading ? "opacity-50" : ""}`}
+                  aria-label={isCameraActive ? "Stop Camera" : "Start Camera"}
+                >
+                  {isCameraActive ? "STOP" : "START"}
+                </button>
+                
+                <button
+                  onClick={repeatLatestDetection}
+                  disabled={!isCameraActive || detections.length === 0}
+                  className="flex-1 py-4 rounded-full text-lg font-bold bg-yellow-600 active:bg-yellow-700 transition-colors shadow-lg disabled:opacity-50"
+                  aria-label="Repeat latest detection"
+                >
+                  REPEAT
+                </button>
+                
+                <button
+                  onClick={toggleSpeech}
+                  className={`flex-1 py-4 rounded-full text-lg font-bold transition-colors shadow-lg ${
+                    speakResults ? "bg-blue-600 active:bg-blue-700" : "bg-gray-600 active:bg-gray-700"
+                  }`}
+                  aria-label={speakResults ? "Turn off voice" : "Turn on voice"}
+                >
+                  {speakResults ? "VOICE" : "MUTE"}
+                </button>
+              </div>
+            </div>
+          )}
+          
           {/* Camera container */}
           <div 
-            className={`relative mx-auto overflow-hidden bg-black ${
-              isFullscreen 
-                ? 'fixed inset-0' 
-                : 'w-full h-[65vh] max-h-[70vh] md:aspect-video rounded-2xl border border-gray-800'
-            }`}
+            className="relative mx-auto overflow-hidden bg-black w-full h-[65vh] max-h-[70vh] md:aspect-video rounded-2xl border border-gray-800"
             onClick={toggleControls}
           >
             <video
@@ -467,83 +494,25 @@ export default function Home() {
             )}
           </div>
           
-          {/* Mobile-optimized floating controls */}
-          {showControls && (
-            <div className={`${isFullscreen ? 'fixed bottom-8 left-0 right-0' : 'mt-2'} px-4`}>
-              {/* Main controls */}
-              <div className="flex justify-around gap-2">
-                <button
-                  onClick={toggleCamera}
-                  disabled={isModelLoading}
-                  className={`flex-1 py-6 rounded-full text-lg font-bold transition-colors shadow-lg ${
-                    isCameraActive
-                      ? "bg-red-600 active:bg-red-700"
-                      : "bg-green-600 active:bg-green-700"
-                  } ${isModelLoading ? "opacity-50" : ""}`}
-                  aria-label={isCameraActive ? "Stop Camera" : "Start Camera"}
-                >
-                  {isCameraActive ? "STOP" : "START"}
-                </button>
-                
-                <button
-                  onClick={repeatLatestDetection}
-                  disabled={!isCameraActive || detections.length === 0}
-                  className="flex-1 py-6 rounded-full text-lg font-bold bg-yellow-600 active:bg-yellow-700 transition-colors shadow-lg disabled:opacity-50"
-                  aria-label="Repeat latest detection"
-                >
-                  REPEAT
-                </button>
-                
-                <button
-                  onClick={toggleSpeech}
-                  className={`flex-1 py-6 rounded-full text-lg font-bold transition-colors shadow-lg ${
-                    speakResults ? "bg-blue-600 active:bg-blue-700" : "bg-gray-600 active:bg-gray-700"
-                  }`}
-                  aria-label={speakResults ? "Turn off voice" : "Turn on voice"}
-                >
-                  {speakResults ? "VOICE" : "MUTE"}
-                </button>
-              </div>
-              
-              
-              {/* Detections list - collapsible on mobile */}
-              {!isFullscreen && detections.length > 0 && (
-                <div className="mt-6 max-h-48 overflow-y-auto rounded-2xl bg-gray-900 border border-gray-800">
-                  <h2 className="text-xl font-bold px-4 py-3 bg-gray-800 rounded-t-2xl">Detected Items</h2>
-                  <ul className="p-2">
-                    {detections
-                      .filter(d => d.score > 0.5)
-                      .sort((a, b) => b.score - a.score)
-                      .map((detection, index) => (
-                      <li key={index} className="flex justify-between items-center p-3 border-b border-gray-800 last:border-none">
-                        <span className="font-bold text-lg capitalize">{detection.class}</span>
-                        <span className="bg-blue-600 px-3 py-1 rounded-full text-sm">
-                          {(detection.score * 100).toFixed(0)}%
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+          {/* Detections list */}
+          {showControls && detections.length > 0 && (
+            <div className="mt-6 max-h-48 overflow-y-auto rounded-2xl bg-gray-900 border border-gray-800">
+              <h2 className="text-xl font-bold px-4 py-3 bg-gray-800 rounded-t-2xl">Detected Items</h2>
+              <ul className="p-2">
+                {detections
+                  .filter(d => d.score > 0.5)
+                  .sort((a, b) => b.score - a.score)
+                  .map((detection, index) => (
+                  <li key={index} className="flex justify-between items-center p-3 border-b border-gray-800 last:border-none">
+                    <span className="font-bold text-lg capitalize">{detection.class}</span>
+                    <span className="bg-blue-600 px-3 py-1 rounded-full text-sm">
+                      {(detection.score * 100).toFixed(0)}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
-          
-          {/* Fullscreen toggle button - always visible */}
-          <button 
-            onClick={toggleFullscreen}
-            className="fixed bottom-4 right-4 bg-black bg-opacity-70 p-3 rounded-full z-50"
-            aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-          >
-            {isFullscreen ? (
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="white" viewBox="0 0 16 16">
-                <path d="M5.5 0a.5.5 0 0 1 .5.5v4A1.5 1.5 0 0 1 4.5 6h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5zm5 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 10 4.5v-4a.5.5 0 0 1 .5-.5zM0 10.5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 6 11.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zm10 1a1.5 1.5 0 0 1 1.5-1.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4z"/>
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="white" viewBox="0 0 16 16">
-                <path d="M1.5 1a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5zm13 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5zM1.5 15a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v4a.5.5 0 0 1-.5.5zm13 0a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v4a.5.5 0 0 1-.5.5z"/>
-              </svg>
-            )}
-          </button>
         </main>
       </div>
     </>
