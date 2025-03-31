@@ -14,6 +14,7 @@ export default function Home() {
   const [detections, setDetections] = useState([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [speakResults, setSpeakResults] = useState(true);
+  const [isGrayscale, setIsGrayscale] = useState(false);
   const [lastSpokenItem, setLastSpokenItem] = useState("");
   const [processingInterval, setProcessingInterval] = useState(500); // ms between predictions
   const [error, setError] = useState(null);
@@ -122,15 +123,17 @@ export default function Home() {
           try {
             await videoRef.current.play();
             console.log("Camera started successfully");
+            
+            // Set state to active first
             setIsCameraActive(true);
             
-            // Start detection after a short delay
+            // Start detection after camera is fully active
             setTimeout(() => {
               if (videoRef.current?.srcObject) { // Double-check stream is still active
                 startDetectionInterval();
                 if (speakResults) speak("Camera started. Scanning for items.");
               }
-            }, 500);
+            }, 1000); // Increased from 500ms to 1000ms for more stability
           } catch (playError) {
             console.error("Error playing video:", playError);
             setError("Camera permission granted but couldn't start video. Please try again.");
@@ -185,17 +188,16 @@ export default function Home() {
     
     // Then set up interval using a function that gets fresh state each time
     timerRef.current = setInterval(() => {
-      // Check the current state directly from videoRef instead of relying on closed-over state
+      // Only check for video activity without logging or state fixing
+      // This eliminates the console spam
       const isVideoActive = videoRef.current && 
-                          videoRef.current.srcObject && 
-                          !videoRef.current.paused;
-                          
-      if (isVideoActive && !isCameraActive) {
-        console.log("Video is active but state is false - fixing state");
-        setIsCameraActive(true); // Update the state to match reality
-      }
+                           videoRef.current.srcObject && 
+                           !videoRef.current.paused;
       
-      detectObjects();
+      // Only run detection if video is actually active
+      if (isVideoActive) {
+        detectObjects();
+      }
     }, processingInterval);
   };
   
@@ -257,6 +259,29 @@ export default function Home() {
         // Draw video frame
         ctx.drawImage(videoRef.current, 0, 0);
         
+        // Apply grayscale effect if enabled - Fixed implementation
+        if (isGrayscale) {
+          try {
+            // Apply grayscale using CSS filter method instead of pixel manipulation
+            // Save the current canvas state
+            ctx.save();
+            
+            // Clear the canvas and redraw with filter
+            ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+            
+            // Set the grayscale filter
+            ctx.filter = 'grayscale(100%) contrast(150%) brightness(125%)';
+            
+            // Redraw the video frame with the filter applied
+            ctx.drawImage(videoRef.current, 0, 0);
+            
+            // Restore the context (removes the filter for subsequent drawing)
+            ctx.restore();
+          } catch (err) {
+            console.error("Error applying grayscale:", err);
+          }
+        }
+        
         // Draw bounding boxes for each detected object
         predictions.forEach(prediction => {
           // Draw only if high enough confidence
@@ -264,9 +289,11 @@ export default function Home() {
             // Get coordinates and dimensions
             const [x, y, width, height] = prediction.bbox;
             
-            // Draw bounding box with iOS-style rounded corners
-            ctx.strokeStyle = '#007AFF'; // iOS blue
+            // Draw bounding box with neon style
+            ctx.strokeStyle = '#00FFFF'; // Neon cyan
             ctx.lineWidth = 4;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00FFFF';
             
             // Draw rounded rectangle
             const radius = 10;
@@ -282,20 +309,28 @@ export default function Home() {
             ctx.arcTo(x, y, x + radius, y, radius);
             ctx.stroke();
             
-            // Draw label with iOS-style pill shape
+            // Reset shadow for text
+            ctx.shadowBlur = 0;
+            
+            // Draw label with neon pill shape
             const padding = 10;
             const textWidth = ctx.measureText(prediction.class).width;
             const bgWidth = textWidth + padding * 2;
             const bgHeight = 28;
             
             // Draw pill background
-            ctx.fillStyle = 'rgba(0, 122, 255, 0.9)'; // iOS blue with transparency
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.8)'; // Neon cyan with transparency
             roundRect(ctx, x, y - bgHeight - 5, bgWidth, bgHeight, 14);
             
-            // Draw label text
+            // Draw label text with glow
             ctx.fillStyle = '#FFFFFF';
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = '#00FFFF';
             ctx.font = 'bold 16px -apple-system, system-ui, "Segoe UI", Roboto, Helvetica';
             ctx.fillText(prediction.class, x + padding, y - 15);
+            
+            // Reset shadow
+            ctx.shadowBlur = 0;
             
             // Mark if this object has been announced with a checkmark
             if (announcedObjectsRef.current.has(prediction.class)) {
@@ -376,6 +411,15 @@ export default function Home() {
     }
   };
   
+  // Toggle grayscale filter
+  const toggleGrayscale = () => {
+    setIsGrayscale(prev => {
+      const newValue = !prev;
+      console.log("Grayscale toggled:", newValue);
+      return newValue;
+    });
+  };
+  
   return (
     <>
       <Head>
@@ -385,36 +429,117 @@ export default function Home() {
         <title>Grocery Assistant</title>
       </Head>
       
+      <style jsx global>{`
+        :root {
+          --neon-green: #39FF14;
+          --neon-green-hover: #50FF30;
+          --neon-red: #FF3131;
+          --neon-red-hover: #FF5050;
+          --neon-blue: #00FFFF;
+          --neon-blue-hover: #40FFFF;
+          --neon-yellow: #FFFF00;
+          --neon-yellow-hover: #FFFF40;
+          --neon-purple: #FF00FF;
+          --neon-purple-hover: #FF40FF;
+          --neon-gray: #AAAAAA;
+          --neon-gray-hover: #BBBBBB;
+        }
+        
+        .neon-green {
+          background-color: var(--neon-green);
+          box-shadow: 0 0 10px var(--neon-green), 0 0 20px var(--neon-green);
+        }
+        .neon-green:active {
+          background-color: var(--neon-green-hover);
+        }
+        
+        .neon-red {
+          background-color: var(--neon-red);
+          box-shadow: 0 0 10px var(--neon-red), 0 0 20px var(--neon-red);
+        }
+        .neon-red:active {
+          background-color: var(--neon-red-hover);
+        }
+        
+        .neon-blue {
+          background-color: var(--neon-blue);
+          box-shadow: 0 0 10px var(--neon-blue), 0 0 20px var(--neon-blue);
+        }
+        .neon-blue:active {
+          background-color: var(--neon-blue-hover);
+        }
+        
+        .neon-yellow {
+          background-color: var(--neon-yellow);
+          box-shadow: 0 0 10px var(--neon-yellow), 0 0 20px var(--neon-yellow);
+        }
+        .neon-yellow:active {
+          background-color: var(--neon-yellow-hover);
+        }
+        
+        .neon-purple {
+          background-color: var(--neon-purple);
+          box-shadow: 0 0 10px var (--neon-purple), 0 0 20px var(--neon-purple);
+        }
+        .neon-purple:active {
+          background-color: var(--neon-purple-hover);
+        }
+        
+        .neon-gray {
+          background-color: var(--neon-gray);
+          box-shadow: 0 0 10px var(--neon-gray), 0 0 20px var(--neon-gray);
+        }
+        .neon-gray:active {
+          background-color: var(--neon-gray-hover);
+        }
+        
+        .neon-border {
+          border-color: var(--neon-blue);
+          box-shadow: 0 0 5px var(--neon-blue);
+        }
+        
+        .neon-text {
+          color: #FFFFFF;
+          text-shadow: 0 0 5px #FFFFFF, 0 0 10px var(--neon-blue);
+        }
+        
+        .neon-spinner {
+          border-color: var(--neon-blue);
+          border-top-color: transparent;
+          box-shadow: 0 0 15px var(--neon-blue);
+        }
+      `}</style>
+      
       <div className="min-h-screen bg-black text-white"
            style={{paddingTop: 'env(safe-area-inset-top)',
                   paddingBottom: 'env(safe-area-inset-bottom)'}}
       >
         <main className="mx-auto p-4">
-          <h1 className="text-2xl font-bold text-center mb-4">Grocery Assistant</h1>
+          <h1 className="text-2xl font-bold text-center mb-4 neon-text">Grocery Assistant</h1>
           
           {/* Model loading state */}
           {isModelLoading && (
             <div className="fixed inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-50">
-              <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-              <p className="mt-4 text-xl px-8 text-center">Loading grocery recognition model...</p>
+              <div className="w-16 h-16 border-4 neon-spinner rounded-full animate-spin"></div>
+              <p className="mt-4 text-xl px-8 text-center neon-text">Loading grocery recognition model...</p>
             </div>
           )}
           
           {/* Error message */}
           {error && (
-            <div className="fixed bottom-20 left-0 right-0 mx-4 bg-red-800 p-4 rounded-lg mb-6 z-40">
+            <div className="fixed bottom-20 left-0 right-0 mx-4 neon-red p-4 rounded-lg mb-6 z-40">
               <p className="font-bold">Error occurred:</p>
               <p>{error}</p>
               <button 
                 onClick={() => setError(null)}
-                className="mt-3 bg-red-600 px-4 py-3 rounded-lg w-full"
+                className="mt-3 neon-red px-4 py-3 rounded-lg w-full"
               >
                 Dismiss
               </button>
             </div>
           )}
           
-          {/* Top Controls - Moved from bottom to top */}
+          {/* Top Controls */}
           {showControls && (
             <div className="mb-4">
               {/* Main controls */}
@@ -424,8 +549,8 @@ export default function Home() {
                   disabled={isModelLoading}
                   className={`flex-1 py-4 rounded-full text-lg font-bold transition-colors shadow-lg ${
                     isCameraActive
-                      ? "bg-red-600 active:bg-red-700"
-                      : "bg-green-600 active:bg-green-700"
+                      ? "neon-red"
+                      : "neon-green"
                   } ${isModelLoading ? "opacity-50" : ""}`}
                   aria-label={isCameraActive ? "Stop Camera" : "Start Camera"}
                 >
@@ -435,20 +560,20 @@ export default function Home() {
                 <button
                   onClick={repeatLatestDetection}
                   disabled={!isCameraActive || detections.length === 0}
-                  className="flex-1 py-4 rounded-full text-lg font-bold bg-yellow-600 active:bg-yellow-700 transition-colors shadow-lg disabled:opacity-50"
+                  className="flex-1 py-4 rounded-full text-lg font-bold neon-yellow transition-colors shadow-lg disabled:opacity-50"
                   aria-label="Repeat latest detection"
                 >
                   REPEAT
                 </button>
                 
                 <button
-                  onClick={toggleSpeech}
+                  onClick={toggleGrayscale}
                   className={`flex-1 py-4 rounded-full text-lg font-bold transition-colors shadow-lg ${
-                    speakResults ? "bg-blue-600 active:bg-blue-700" : "bg-gray-600 active:bg-gray-700"
+                    isGrayscale ? "neon-purple" : "neon-gray"
                   }`}
-                  aria-label={speakResults ? "Turn off voice" : "Turn on voice"}
+                  aria-label={isGrayscale ? "Turn off grayscale" : "Turn on grayscale"}
                 >
-                  {speakResults ? "VOICE" : "MUTE"}
+                  {isGrayscale ? "COLOR" : "B&W"}
                 </button>
               </div>
             </div>
@@ -456,16 +581,18 @@ export default function Home() {
           
           {/* Camera container */}
           <div 
-            className="relative mx-auto overflow-hidden bg-black w-full h-[65vh] max-h-[70vh] md:aspect-video rounded-2xl border border-gray-800"
+            className="relative mx-auto overflow-hidden bg-black w-full h-[65vh] max-h-[70vh] md:aspect-video rounded-2xl border neon-border"
             onClick={toggleControls}
           >
             <video
               ref={videoRef}
-              className="absolute inset-0 w-full h-full object-cover"
+              className={`absolute inset-0 w-full h-full object-cover`}
               playsInline={true}
               muted={true}
               autoPlay={true}
-              style={{display: isCameraActive ? 'block' : 'none'}}
+              style={{
+                display: isCameraActive ? 'block' : 'none'
+              }}
             ></video>
             <canvas
               ref={canvasRef}
@@ -473,22 +600,29 @@ export default function Home() {
               aria-hidden="true"
             ></canvas>
             
+            {/* Grayscale indicator */}
+            {isCameraActive && isGrayscale && (
+              <div className="absolute bottom-4 left-4 neon-purple px-3 py-1 rounded-full text-sm">
+                B&W Mode
+              </div>
+            )}
+            
             {!isCameraActive && !isModelLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
-                <p className="text-2xl">Camera is off</p>
+                <p className="text-2xl neon-text">Camera is off</p>
               </div>
             )}
             
             {/* Camera status indicator */}
             {isCameraActive && (
-              <div className="absolute top-4 left-4 bg-green-600 px-3 py-1 rounded-full text-sm">
+              <div className="absolute top-4 left-4 neon-green px-3 py-1 rounded-full text-sm">
                 Camera Active
               </div>
             )}
             
             {/* Object count badge */}
             {isCameraActive && detections.length > 0 && (
-              <div className="absolute top-4 right-4 bg-black bg-opacity-70 px-3 py-1 rounded-full">
+              <div className="absolute top-4 right-4 bg-black bg-opacity-70 px-3 py-1 rounded-full neon-text">
                 {detections.length} {detections.length === 1 ? 'object' : 'objects'}
               </div>
             )}
@@ -496,16 +630,16 @@ export default function Home() {
           
           {/* Detections list */}
           {showControls && detections.length > 0 && (
-            <div className="mt-6 max-h-48 overflow-y-auto rounded-2xl bg-gray-900 border border-gray-800">
-              <h2 className="text-xl font-bold px-4 py-3 bg-gray-800 rounded-t-2xl">Detected Items</h2>
+            <div className="mt-6 max-h-48 overflow-y-auto rounded-2xl bg-black border neon-border">
+              <h2 className="text-xl font-bold px-4 py-3 neon-text rounded-t-2xl">Detected Items</h2>
               <ul className="p-2">
                 {detections
                   .filter(d => d.score > 0.5)
                   .sort((a, b) => b.score - a.score)
                   .map((detection, index) => (
                   <li key={index} className="flex justify-between items-center p-3 border-b border-gray-800 last:border-none">
-                    <span className="font-bold text-lg capitalize">{detection.class}</span>
-                    <span className="bg-blue-600 px-3 py-1 rounded-full text-sm">
+                    <span className="font-bold text-lg capitalize neon-text">{detection.class}</span>
+                    <span className="neon-blue px-3 py-1 rounded-full text-sm">
                       {(detection.score * 100).toFixed(0)}%
                     </span>
                   </li>
