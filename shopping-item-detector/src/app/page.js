@@ -256,29 +256,48 @@ export default function Home() {
         canvasRef.current.width = videoRef.current.videoWidth;
         canvasRef.current.height = videoRef.current.videoHeight;
         
+        // Clear canvas first
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        
         // Draw video frame
         ctx.drawImage(videoRef.current, 0, 0);
         
-        // Apply grayscale effect if enabled - Fixed implementation
-        if (isGrayscale) {
+        // Capture the current grayscale state to avoid race conditions
+        const shouldApplyGrayscale = isGrayscale;
+        
+        // Apply high-contrast black and white effect if enabled - Mobile Compatible Version
+        if (shouldApplyGrayscale) {
           try {
-            // Apply grayscale using CSS filter method instead of pixel manipulation
-            // Save the current canvas state
-            ctx.save();
+            // Mobile-compatible approach using direct pixel manipulation
+            const imageData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+            const data = imageData.data;
             
-            // Clear the canvas and redraw with filter
-            ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+            // Apply high-contrast grayscale - optimize for faster processing
+            for (let i = 0; i < data.length; i += 4) {
+              // Convert to grayscale with human-perception weights
+              const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+              
+              // Apply contrast - increase difference between light and dark
+              const contrastFactor = 2.0; // Increased for more pronounced effect
+              const brightnessFactor = 20; // Adjusted for better visibility
+              
+              // Apply contrast and brightness adjustments
+              let contrast = (gray - 128) * contrastFactor + 128 + brightnessFactor;
+              
+              // Clamp values between 0 and 255
+              contrast = Math.max(0, Math.min(255, contrast));
+              
+              // Set all RGB channels to the same value for grayscale
+              data[i] = contrast;     // Red
+              data[i + 1] = contrast; // Green
+              data[i + 2] = contrast; // Blue
+              // Alpha remains unchanged (data[i + 3])
+            }
             
-            // Set the grayscale filter
-            ctx.filter = 'grayscale(100%) contrast(150%) brightness(125%)';
-            
-            // Redraw the video frame with the filter applied
-            ctx.drawImage(videoRef.current, 0, 0);
-            
-            // Restore the context (removes the filter for subsequent drawing)
-            ctx.restore();
+            // Write the modified image data back to the canvas
+            ctx.putImageData(imageData, 0, 0);
           } catch (err) {
-            console.error("Error applying grayscale:", err);
+            console.error("Error applying high-contrast filter:", err);
           }
         }
         
@@ -411,14 +430,57 @@ export default function Home() {
     }
   };
   
-  // Toggle grayscale filter
+  // Toggle grayscale filter - modified to be more robust
   const toggleGrayscale = () => {
     setIsGrayscale(prev => {
       const newValue = !prev;
-      console.log("Grayscale toggled:", newValue);
+      console.log("High-contrast mode toggled:", newValue);
+      
+      // Force an immediate re-detection after a short delay to ensure state is updated
+      setTimeout(() => {
+        if (isCameraActive && videoRef.current && videoRef.current.srcObject) {
+          console.log("Forcing detection after toggle");
+          detectObjects();
+        }
+      }, 50);
+      
       return newValue;
     });
   };
+
+  // Listen for grayscale toggle and announce changes
+  useEffect(() => {
+    if (isCameraActive) {
+      // Announce change in mode
+      if (isGrayscale) {
+        if (speakResults) speak("High contrast mode enabled");
+      } else {
+        if (speakResults) speak("Color mode enabled");
+      }
+      
+      // Force multiple detections to ensure the UI is properly updated
+      if (videoRef.current && videoRef.current.srcObject) {
+        console.log("Forcing multiple detections after filter change");
+        
+        // Clear any existing detection interval
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+        
+        // Run immediate detections
+        detectObjects();
+        
+        // Schedule a few more detections with delays to ensure complete update
+        setTimeout(() => detectObjects(), 100);
+        setTimeout(() => detectObjects(), 300);
+        
+        // Then restart the regular detection interval
+        setTimeout(() => {
+          startDetectionInterval();
+        }, 500);
+      }
+    }
+  }, [isGrayscale]);
   
   return (
     <>
@@ -571,9 +633,9 @@ export default function Home() {
                   className={`flex-1 py-4 rounded-full text-lg font-bold transition-colors shadow-lg ${
                     isGrayscale ? "neon-purple" : "neon-gray"
                   }`}
-                  aria-label={isGrayscale ? "Turn off grayscale" : "Turn on grayscale"}
+                  aria-label={isGrayscale ? "Turn off high contrast" : "Turn on high contrast"}
                 >
-                  {isGrayscale ? "COLOR" : "B&W"}
+                  {isGrayscale ? "COLOR" : "HI-CON"}
                 </button>
               </div>
             </div>
@@ -600,10 +662,10 @@ export default function Home() {
               aria-hidden="true"
             ></canvas>
             
-            {/* Grayscale indicator */}
+            {/* Grayscale indicator - Updated text */}
             {isCameraActive && isGrayscale && (
               <div className="absolute bottom-4 left-4 neon-purple px-3 py-1 rounded-full text-sm">
-                B&W Mode
+                High Contrast Mode
               </div>
             )}
             
